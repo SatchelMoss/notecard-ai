@@ -1,26 +1,49 @@
 /**
- * Client-side clipboard HTML parser.
+ * Clipboard HTML → TipTap JSON with proper math rendering.
  *
- * When copying from Claude.ai or ChatGPT, the clipboard contains rich HTML
- * including KaTeX output. KaTeX renders both:
- *   - <span class="katex-html" aria-hidden="true"> — visual render (skip)
- *   - <span class="katex-mathml"><math>...</math></span> — MathML (use this)
- *
- * We parse the MathML to recover proper sub/superscripts, fractions, etc.
+ * Plain HTML sub/sup cannot position ∑ limits above/below or render x̄.
+ * Only KaTeX can. We:
+ *   1. Parse clipboard HTML from Claude/ChatGPT
+ *   2. Extract MathML from KaTeX's katex-mathml spans
+ *   3. Convert MathML → LaTeX
+ *   4. Output TipTap JSON with inlineMath nodes (rendered by KaTeX)
  */
 
-function esc(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+// ── MathML → LaTeX ────────────────────────────────────────────────────────────
+
+const GREEK_TO_LATEX: Record<string, string> = {
+  'α':'\\alpha','β':'\\beta','γ':'\\gamma','δ':'\\delta','ε':'\\varepsilon',
+  'ζ':'\\zeta','η':'\\eta','θ':'\\theta','ι':'\\iota','κ':'\\kappa',
+  'λ':'\\lambda','μ':'\\mu','ν':'\\nu','ξ':'\\xi','π':'\\pi','ρ':'\\rho',
+  'σ':'\\sigma','τ':'\\tau','υ':'\\upsilon','φ':'\\phi','χ':'\\chi',
+  'ψ':'\\psi','ω':'\\omega',
+  'Γ':'\\Gamma','Δ':'\\Delta','Θ':'\\Theta','Λ':'\\Lambda','Ξ':'\\Xi',
+  'Π':'\\Pi','Σ':'\\Sigma','Υ':'\\Upsilon','Φ':'\\Phi','Ψ':'\\Psi','Ω':'\\Omega',
 }
 
-// ── MathML → compact HTML ─────────────────────────────────────────────────────
+const OP_TO_LATEX: Record<string, string> = {
+  '∑':'\\sum','∏':'\\prod','∫':'\\int','∬':'\\iint','∭':'\\iiint',
+  '∂':'\\partial','∞':'\\infty','∇':'\\nabla',
+  '≤':'\\leq','≥':'\\geq','≠':'\\neq','≈':'\\approx','≡':'\\equiv','∝':'\\propto',
+  '±':'\\pm','∓':'\\mp','×':'\\times','÷':'\\div','⋅':'\\cdot','·':'\\cdot',
+  '→':'\\to','←':'\\leftarrow','↔':'\\leftrightarrow',
+  '⇒':'\\Rightarrow','⇐':'\\Leftarrow','⟹':'\\Longrightarrow',
+  '∈':'\\in','∉':'\\notin','⊂':'\\subset','⊃':'\\supset','⊆':'\\subseteq',
+  '∩':'\\cap','∪':'\\cup','∅':'\\emptyset',
+  '…':'\\ldots','⋯':'\\cdots','⋮':'\\vdots',
+  '√':'\\sqrt','|':'|','‖':'\\|',
+  'max':'\\max','min':'\\min','arg':'\\arg','lim':'\\lim',
+  'log':'\\log','ln':'\\ln','exp':'\\exp','sin':'\\sin','cos':'\\cos',
+  'tan':'\\tan','sup':'\\sup','inf':'\\inf','det':'\\det',
+  'mod':'\\bmod','∼':'\\sim',
+}
 
 function mathChildren(el: Element): string {
-  return Array.from(el.children).map(mathToHtml).join('')
+  return Array.from(el.children).map(mathToLatex).join('')
 }
 
-function mathToHtml(el: Element): string {
-  const tag = el.tagName.toLowerCase().replace(/^[a-z]+:/, '') // strip namespace
+function mathToLatex(el: Element): string {
+  const tag = el.tagName.toLowerCase().replace(/^[a-z]+:/, '')
 
   switch (tag) {
     case 'math':
@@ -31,150 +54,197 @@ function mathToHtml(el: Element): string {
       return mathChildren(el)
 
     case 'semantics': {
-      // First child is the actual MathML; rest are annotations — skip annotations
+      // First child is real MathML; rest are annotations (skip)
       const ch = Array.from(el.children)
-      return ch.length ? mathToHtml(ch[0]) : mathChildren(el)
+      const mathChild = ch.find(c => c.tagName.toLowerCase().replace(/^[a-z]+:/, '') !== 'annotation')
+      return mathChild ? mathToLatex(mathChild) : mathChildren(el)
     }
 
     case 'msub': {
       const [base, sub] = Array.from(el.children)
-      if (!base) return mathChildren(el)
-      return `${mathToHtml(base)}<sub>${sub ? mathToHtml(sub) : ''}</sub>`
+      return `{${mathToLatex(base)}}_{${sub ? mathToLatex(sub) : ''}}`
     }
     case 'msup': {
       const [base, sup] = Array.from(el.children)
-      if (!base) return mathChildren(el)
-      return `${mathToHtml(base)}<sup>${sup ? mathToHtml(sup) : ''}</sup>`
+      return `{${mathToLatex(base)}}^{${sup ? mathToLatex(sup) : ''}}`
     }
     case 'msubsup': {
       const [base, sub, sup] = Array.from(el.children)
-      if (!base) return mathChildren(el)
-      return `${mathToHtml(base)}<sub>${sub ? mathToHtml(sub) : ''}</sub><sup>${sup ? mathToHtml(sup) : ''}</sup>`
+      return `{${mathToLatex(base)}}_{${sub ? mathToLatex(sub) : ''}}^{${sup ? mathToLatex(sup) : ''}}`
     }
     case 'munderover': {
       const [base, under, over] = Array.from(el.children)
-      if (!base) return mathChildren(el)
-      return `${mathToHtml(base)}<sub>${under ? mathToHtml(under) : ''}</sub><sup>${over ? mathToHtml(over) : ''}</sup>`
+      return `{${mathToLatex(base)}}_{${under ? mathToLatex(under) : ''}}^{${over ? mathToLatex(over) : ''}}`
     }
     case 'munder': {
       const [base, under] = Array.from(el.children)
-      if (!base) return mathChildren(el)
-      return `${mathToHtml(base)}<sub>${under ? mathToHtml(under) : ''}</sub>`
+      return `{${mathToLatex(base)}}_{${under ? mathToLatex(under) : ''}}`
     }
     case 'mover': {
       const [base, over] = Array.from(el.children)
-      if (!base) return mathChildren(el)
       const accent = over?.textContent?.trim() ?? ''
-      if ('¯‾―'.includes(accent)) return `${mathToHtml(base)}̄`   // x-bar
-      if ('^ˆ'.includes(accent))  return `${mathToHtml(base)}̂`   // x-hat
-      if ('→⃗'.includes(accent))  return `${mathToHtml(base)}⃗`   // x-vec
-      return `${mathToHtml(base)}<sup>${mathToHtml(over)}</sup>`
+      const baseLatex = mathToLatex(base)
+      if ('¯ˉ‾'.includes(accent)) return `\\bar{${baseLatex}}`
+      if ('^ˆ'.includes(accent))  return `\\hat{${baseLatex}}`
+      if ('~˜'.includes(accent))  return `\\tilde{${baseLatex}}`
+      if ('→'.includes(accent))   return `\\vec{${baseLatex}}`
+      if ('⃗'.includes(accent))   return `\\vec{${baseLatex}}`
+      if ('·'.includes(accent))   return `\\dot{${baseLatex}}`
+      if ('¨'.includes(accent))   return `\\ddot{${baseLatex}}`
+      return `\\overset{${over ? mathToLatex(over) : ''}}{${baseLatex}}`
     }
     case 'mfrac': {
       const [num, den] = Array.from(el.children)
-      return `(${num ? mathToHtml(num) : ''})/(${den ? mathToHtml(den) : ''})`
+      return `\\frac{${num ? mathToLatex(num) : ''}}{${den ? mathToLatex(den) : ''}}`
     }
-    case 'msqrt': return `√(${mathChildren(el)})`
+    case 'msqrt': return `\\sqrt{${mathChildren(el)}}`
     case 'mroot': {
       const [base, index] = Array.from(el.children)
-      return `${index ? mathToHtml(index) : ''}√(${base ? mathToHtml(base) : ''})`
+      return `\\sqrt[${index ? mathToLatex(index) : ''}]{${base ? mathToLatex(base) : ''}}`
     }
-    case 'mspace':      return ' '
-    case 'annotation':  return ''  // LaTeX source — skip
-    case 'mi':
-    case 'mn':
-    case 'mo':
-    case 'mtext':       return esc(el.textContent ?? '')
-    default:            return mathChildren(el)
+    case 'mspace': return '\\ '
+    case 'annotation': return ''   // LaTeX source — ignore (avoid double render)
+
+    case 'mi': {
+      const t = el.textContent?.trim() ?? ''
+      return GREEK_TO_LATEX[t] ?? t
+    }
+    case 'mn': return el.textContent?.trim() ?? ''
+    case 'mo': {
+      const t = el.textContent?.trim() ?? ''
+      return OP_TO_LATEX[t] ?? t
+    }
+    case 'mtext': {
+      const t = el.textContent?.trim() ?? ''
+      return `\\text{${t}}`
+    }
+    default: return mathChildren(el)
   }
 }
 
-// ── HTML DOM walker ───────────────────────────────────────────────────────────
+// ── TipTap JSON node builders ─────────────────────────────────────────────────
 
-// Markers for structural elements — replaced later
-const HEADING_MARK = '\x01'
-const BULLET_MARK  = '\x02'
+type TipTapNode =
+  | { type: 'text'; text: string; marks?: { type: string }[] }
+  | { type: 'inlineMath'; attrs: { latex: string } }
+  | { type: 'hardBreak' }
+  | { type: 'paragraph'; content: TipTapNode[] }
 
-function walkNode(node: Node): string {
+function textNode(text: string, bold = false): TipTapNode {
+  if (!text) return { type: 'text', text: '' }
+  return bold
+    ? { type: 'text', text, marks: [{ type: 'bold' }] }
+    : { type: 'text', text }
+}
+
+function mathNode(latex: string): TipTapNode {
+  return { type: 'inlineMath', attrs: { latex: latex.trim() } }
+}
+
+// ── DOM walker → TipTap inline nodes ─────────────────────────────────────────
+
+function walkInline(node: Node, bold = false): TipTapNode[] {
   if (node.nodeType === Node.TEXT_NODE) {
-    return esc(node.textContent ?? '')
+    const t = node.textContent ?? ''
+    return t ? [textNode(t, bold)] : []
   }
-  if (node.nodeType !== Node.ELEMENT_NODE) return ''
+  if (node.nodeType !== Node.ELEMENT_NODE) return []
 
   const el = node as Element
 
-  // Skip aria-hidden elements (KaTeX visual renders, decorative spans)
-  if (el.getAttribute('aria-hidden') === 'true') return ''
+  // Skip aria-hidden (KaTeX visual renders)
+  if (el.getAttribute('aria-hidden') === 'true') return []
 
   const tag = el.tagName.toLowerCase()
+  if (['script', 'style', 'head'].includes(tag)) return []
 
-  // Skip non-content elements
-  if (['head','script','style','noscript'].includes(tag)) return ''
+  // MathML root → inlineMath node with KaTeX
+  if (tag === 'math') {
+    const latex = mathToLatex(el)
+    return latex.trim() ? [mathNode(latex)] : []
+  }
 
-  // MathML root — convert to compact HTML
-  if (tag === 'math') return mathToHtml(el)
-
-  // KaTeX mathml wrapper — find the math element inside
+  // KaTeX mathml wrapper
   if (el.classList.contains('katex-mathml')) {
     const math = el.querySelector('math')
-    return math ? mathToHtml(math) : ''
+    if (math) {
+      const latex = mathToLatex(math)
+      return latex.trim() ? [mathNode(latex)] : []
+    }
+    return []
   }
 
-  // KaTeX visual render — skip entirely
-  if (el.classList.contains('katex-html')) return ''
+  // KaTeX visual render — skip
+  if (el.classList.contains('katex-html')) return []
 
-  // Walk children
-  const children = Array.from(el.childNodes).map(walkNode).join('')
+  const isBold = bold || tag === 'strong' || tag === 'b'
 
-  switch (tag) {
-    case 'strong': case 'b': return `<strong>${children}</strong>`
-    case 'em':     case 'i': return `<em>${children}</em>`
-    case 'sub':              return `<sub>${children}</sub>`
-    case 'sup':              return `<sup>${children}</sup>`
-    case 'code':             return `<code>${children}</code>`
-    case 'br':               return '\n'
+  const children = Array.from(el.childNodes).flatMap(n => walkInline(n, isBold))
 
-    case 'h1': case 'h2': case 'h3':
-    case 'h4': case 'h5': case 'h6':
-      return `\n${HEADING_MARK}${children}\n`
+  if (tag === 'br') return [{ type: 'hardBreak' }]
+  return children
+}
 
-    case 'li':  return `\n${BULLET_MARK}${children}`
-    case 'ul': case 'ol': return children + '\n'
+// ── Block-level walker ────────────────────────────────────────────────────────
 
-    case 'p':
-    case 'div':
-    case 'tr':
-    case 'section':
-    case 'article': return children + '\n'
+const HEADING_MARK = '\x01'
+const BULLET_MARK  = '\x02'
 
-    case 'td': case 'th': return children + '  '
+interface RawBlock {
+  type: 'heading' | 'bullet' | 'para'
+  inline: TipTapNode[]
+}
 
-    default: return children
+function walkBlocks(node: Node): RawBlock[] {
+  if (node.nodeType !== Node.ELEMENT_NODE) return []
+
+  const el = node as Element
+  if (el.getAttribute('aria-hidden') === 'true') return []
+
+  const tag = el.tagName.toLowerCase()
+  if (['script','style','head'].includes(tag)) return []
+
+  if (/^h[1-6]$/.test(tag)) {
+    const inline = Array.from(el.childNodes).flatMap(n => walkInline(n, true))
+    return [{ type: 'heading', inline }]
   }
+
+  if (tag === 'li') {
+    const inline = Array.from(el.childNodes).flatMap(n => walkInline(n))
+    return [{ type: 'bullet', inline }]
+  }
+
+  if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'article') {
+    // Check if any child is a block element — if so, recurse into blocks
+    const hasBlocks = Array.from(el.children).some(c =>
+      /^(h[1-6]|p|div|ul|ol|li|section|article|blockquote)$/.test(c.tagName.toLowerCase())
+    )
+    if (hasBlocks) {
+      return Array.from(el.childNodes).flatMap(n => walkBlocks(n))
+    }
+    const inline = Array.from(el.childNodes).flatMap(n => walkInline(n))
+    if (inline.length) return [{ type: 'para', inline }]
+    return []
+  }
+
+  // For ul/ol/table etc., recurse
+  return Array.from(el.childNodes).flatMap(n => walkBlocks(n))
 }
 
-// ── line-level cleanup ────────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────────
 
-function normalizeSpaces(s: string): string {
-  return s
-    .replace(/[\u200B\u200C\u200D\u2061\u2062\u2063\u2064\uFEFF\u00AD\u2060]/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-// ── main export ───────────────────────────────────────────────────────────────
-
-export interface ClipboardSection {
-  header: string   // '' if no heading
-  bullets: string[]
-  lines: string[]
+export interface NotecardTipTapDoc {
+  type: 'doc'
+  content: { type: 'paragraph'; content: TipTapNode[] }[]
 }
 
 /**
- * Parse clipboard HTML into sections ready for compact notecard rendering.
- * Returns null if the HTML is empty or unparseable.
+ * Parse clipboard HTML into a compact TipTap document.
+ * Each heading starts a new paragraph with bold header.
+ * Math elements become inlineMath nodes (rendered by KaTeX).
+ * Returns null if nothing usable found.
  */
-export function parseClipboardHtml(html: string): ClipboardSection[] | null {
+export function parseClipboardToTipTap(html: string): NotecardTipTapDoc | null {
   if (!html?.trim()) return null
 
   let doc: Document
@@ -184,65 +254,39 @@ export function parseClipboardHtml(html: string): ClipboardSection[] | null {
     return null
   }
 
-  const raw = walkNode(doc.body)
-  if (!raw.trim()) return null
+  // Remove script/style
+  doc.querySelectorAll('script,style').forEach(el => el.remove())
 
-  // Split into lines, apply markers
-  const rawLines = raw.split('\n')
-  const sections: ClipboardSection[] = []
-  let cur: ClipboardSection = { header: '', bullets: [], lines: [] }
+  const blocks = walkBlocks(doc.body)
+  if (!blocks.length) return null
 
-  const pushCur = () => {
-    if (cur.header || cur.bullets.length || cur.lines.length) {
-      sections.push(cur)
-    }
-    cur = { header: '', bullets: [], lines: [] }
+  // Group into paragraphs: each heading starts a new paragraph
+  // Bullets and paras flow into the current paragraph inline with • separators
+  const paragraphs: { type: 'paragraph'; content: TipTapNode[] }[] = []
+  let cur: TipTapNode[] = []
+
+  const flushPara = () => {
+    const trimmed = cur.filter(n => !(n.type === 'text' && !(n as {text:string}).text?.trim()))
+    if (trimmed.length) paragraphs.push({ type: 'paragraph', content: trimmed })
+    cur = []
   }
 
-  for (const rawLine of rawLines) {
-    if (rawLine.startsWith(HEADING_MARK)) {
-      pushCur()
-      cur.header = normalizeSpaces(rawLine.slice(1))
-      continue
-    }
-    if (rawLine.startsWith(BULLET_MARK)) {
-      cur.bullets.push(normalizeSpaces(rawLine.slice(1)))
-      continue
-    }
-    const clean = normalizeSpaces(rawLine)
-    if (clean) cur.lines.push(clean)
-  }
-  pushCur()
-
-  return sections.length ? sections : null
-}
-
-/**
- * Convert parsed clipboard sections to compact notecard HTML.
- * One <p> per section, everything inline.
- */
-export function sectionsToHtml(sections: ClipboardSection[]): string {
-  const parts: string[] = []
-
-  for (const sec of sections) {
-    const tokens: string[] = []
-
-    if (sec.header) {
-      tokens.push(`<strong>${sec.header}</strong>`)
-    }
-
-    for (const line of sec.lines) {
-      if (line) tokens.push(line)
-    }
-
-    for (const bullet of sec.bullets) {
-      if (bullet) tokens.push(`• ${bullet}`)
-    }
-
-    if (tokens.length) {
-      parts.push(`<p>${tokens.join(' ')}</p>`)
+  for (const block of blocks) {
+    if (block.type === 'heading') {
+      flushPara()
+      cur.push(...block.inline)
+      cur.push(textNode(' '))
+    } else if (block.type === 'bullet') {
+      if (cur.length) cur.push(textNode('  '))
+      cur.push(textNode('• '))
+      cur.push(...block.inline)
+    } else {
+      // para — add space separator if we're mid-paragraph
+      if (cur.length) cur.push(textNode(' '))
+      cur.push(...block.inline)
     }
   }
+  flushPara()
 
-  return parts.join('')
+  return paragraphs.length ? { type: 'doc', content: paragraphs } : null
 }

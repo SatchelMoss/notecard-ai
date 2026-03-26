@@ -20,7 +20,9 @@ const PAD = 8
 export default function NotecardEditor() {
   const {
     config, activeEditorSide, setActiveEditorSide,
-    setEditorContent, setEditorHtml, pendingHtml, setPendingHtml,
+    setEditorContent, setEditorHtml,
+    pendingHtml, setPendingHtml,
+    pendingJson, setPendingJson,
   } = useNotecardStore()
   const { dimensions, sides, sheets } = config
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -78,12 +80,22 @@ export default function NotecardEditor() {
   useEffect(() => {
     if (pendingHtml && editor) {
       editor.commands.setContent(pendingHtml)
-      setEditorHtml(activeEditorSide, pendingHtml)
+      setEditorHtml(activeEditorSide, editor.getHTML())
       setPendingHtml(null)
       setLockedPt(null)
       requestAnimationFrame(() => requestAnimationFrame(autoScale))
     }
   }, [pendingHtml, editor])
+
+  useEffect(() => {
+    if (pendingJson && editor) {
+      editor.commands.setContent(pendingJson)
+      setEditorHtml(activeEditorSide, editor.getHTML())
+      setPendingJson(null)
+      setLockedPt(null)
+      requestAnimationFrame(() => requestAnimationFrame(autoScale))
+    }
+  }, [pendingJson, editor])
 
   const totalSides = sides === 'double' ? sheets * 2 : sheets
   const sideLabels = Array.from({ length: totalSides }, (_, i) =>

@@ -2,75 +2,51 @@
 
 import { useState, useRef } from 'react'
 import { parsePastedNotes } from '@/lib/parsing/pasteParser'
-import { parseClipboardHtml, sectionsToHtml } from '@/lib/parsing/clipboardParser'
+import { parseClipboardToTipTap } from '@/lib/parsing/clipboardParser'
 import { useNotecardStore } from '@/lib/store/notecardStore'
 
 export default function PasteNotesPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [text, setText] = useState('')
-  const [status, setStatus] = useState<{ chars: number; source: string } | null>(null)
+  const [status, setStatus] = useState<{ chars: number; rich: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const { setPendingHtml } = useNotecardStore()
+  const { setPendingHtml, setPendingJson } = useNotecardStore()
 
-  const format = (rawText: string, htmlOverride?: string) => {
+  const format = (rawText: string, clipboardHtml?: string) => {
     setError(null)
-    let html: string
-    let source: string
 
-    if (htmlOverride) {
-      // Try clipboard HTML path first (preserves MathML sub/sup)
-      const sections = parseClipboardHtml(htmlOverride)
-      if (sections && sections.length > 0) {
-        html = sectionsToHtml(sections)
-        source = 'rich'
-      } else {
-        // Fall back to plain text parser
-        const result = parsePastedNotes(rawText)
-        html = result.html
-        source = 'text'
+    // Try rich clipboard HTML path first — gives us proper KaTeX math nodes
+    if (clipboardHtml) {
+      const doc = parseClipboardToTipTap(clipboardHtml)
+      if (doc && doc.content.length > 0) {
+        setPendingJson(doc)
+        const charCount = JSON.stringify(doc).replace(/"[^"]+"/g, m => m).length
+        setStatus({ chars: charCount, rich: true })
+        return
       }
-    } else {
-      const result = parsePastedNotes(rawText)
-      html = result.html
-      source = 'text'
     }
 
-    if (!html.trim()) {
-      setError('Nothing to format — paste your notes first.')
-      return
-    }
-
-    setPendingHtml(html)
-    setStatus({ chars: html.replace(/<[^>]+>/g, '').length, source })
+    // Fall back to plain text parser → HTML
+    if (!rawText.trim()) { setError('Paste your notes first.'); return }
+    const result = parsePastedNotes(rawText)
+    if (!result.html.trim()) { setError('Nothing could be parsed.'); return }
+    setPendingHtml(result.html)
+    setStatus({ chars: result.charCount, rich: false })
   }
 
-  // Intercept paste to capture clipboard HTML (contains MathML sub/sup)
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const htmlData = e.clipboardData.getData('text/html')
     const textData = e.clipboardData.getData('text/plain')
-
-    // Let the default paste fill the textarea (for display / fallback)
-    // Then after the textarea updates, run format
     setTimeout(() => {
-      const current = textareaRef.current?.value ?? textData
-      format(current, htmlData)
-      setText(current)
+      const currentText = textareaRef.current?.value ?? textData
+      setText(currentText)
+      format(currentText, htmlData)
     }, 0)
   }
 
-  const handleManualFormat = () => {
-    if (!text.trim()) {
-      setError('Paste your notes first.')
-      return
-    }
-    format(text)
-  }
+  const handleManualFormat = () => format(text)
 
-  const handleClear = () => {
-    setText('')
-    setStatus(null)
-    setError(null)
-  }
+  const handleClear = () => { setText(''); setStatus(null); setError(null) }
 
   return (
     <div className="flex flex-col gap-3">
@@ -86,7 +62,8 @@ export default function PasteNotesPanel() {
       </div>
 
       <p className="text-xs text-gray-500 leading-relaxed">
-        Copy your notesheet from Claude or ChatGPT and paste below. Equations, subscripts, superscripts, and Greek letters are preserved from the source.
+        Copy your notesheet from Claude or ChatGPT and paste below.
+        Subscripts, superscripts, x̄, ∑ limits, and Greek letters are preserved.
       </p>
 
       <textarea
@@ -101,11 +78,9 @@ export default function PasteNotesPanel() {
 
       {status && (
         <p className="text-xs text-green-400 bg-green-950/30 rounded px-2 py-1.5">
-          ✓ Formatted — {status.chars} chars
-          {status.source === 'rich' ? ' (math preserved from clipboard)' : ''}
+          ✓ Formatted{status.rich ? ' — math rendered with KaTeX' : ''}
         </p>
       )}
-
       {error && (
         <p className="text-xs text-red-400 bg-red-950/30 rounded px-2 py-1.5">{error}</p>
       )}
@@ -121,9 +96,8 @@ export default function PasteNotesPanel() {
       >
         Format onto Notecard
       </button>
-
-      <p className="text-xs text-gray-500 text-center leading-relaxed">
-        Formatting runs automatically on paste. Use the button if you edit the text manually.
+      <p className="text-xs text-gray-500 text-center">
+        Auto-formats on paste. Use button after manual edits.
       </p>
     </div>
   )

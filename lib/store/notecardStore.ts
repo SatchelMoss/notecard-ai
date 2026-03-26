@@ -19,6 +19,7 @@ interface NotecardStore {
   editorHtmlBack: string
   activeEditorSide: 'front' | 'back'
   pendingHtml: string | null
+  pendingJson: object | null
 
   setPreset: (preset: DimensionPreset) => void
   setCustomDimensions: (dims: Dimensions) => void
@@ -32,6 +33,7 @@ interface NotecardStore {
   setEditorHtml: (side: 'front' | 'back', html: string) => void
   setActiveEditorSide: (side: 'front' | 'back') => void
   setPendingHtml: (html: string | null) => void
+  setPendingJson: (json: object | null) => void
 }
 
 export const useNotecardStore = create<NotecardStore>((set) => ({
@@ -49,6 +51,7 @@ export const useNotecardStore = create<NotecardStore>((set) => ({
   editorHtmlBack: '',
   activeEditorSide: 'front',
   pendingHtml: null,
+  pendingJson: null,
 
   setPreset: (preset) =>
     set((state) => ({
@@ -115,4 +118,5 @@ export const useNotecardStore = create<NotecardStore>((set) => ({
 
   setActiveEditorSide: (side) => set({ activeEditorSide: side }),
   setPendingHtml: (html) => set({ pendingHtml: html }),
+  setPendingJson: (json) => set({ pendingJson: json }),
 }))
