@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { ParsedDocument } from '@/types/notecard'
 
+// Polyfill browser APIs that pdf-parse/pdfjs requires in Node.js
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(globalThis as any).DOMMatrix = class DOMMatrix {
+    constructor() {}
+  }
+}
+if (typeof globalThis.Path2D === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(globalThis as any).Path2D = class Path2D {}
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
@@ -10,9 +22,8 @@ export async function POST(req: NextRequest) {
 
     const buffer = Buffer.from(await file.arrayBuffer())
 
-    // Dynamically import pdf-parse (avoids Next.js edge runtime issues)
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require('pdf-parse')
+    const pdfParse = require('pdf-parse/lib/pdf-parse.js')
     const data = await pdfParse(buffer)
 
     const text: string = data.text

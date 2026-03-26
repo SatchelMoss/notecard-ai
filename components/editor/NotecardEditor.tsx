@@ -14,7 +14,7 @@ import 'katex/dist/katex.min.css'
 const PX_PER_INCH = 96
 
 export default function NotecardEditor() {
-  const { config, activeEditorSide, setActiveEditorSide, setEditorContent } =
+  const { config, activeEditorSide, setActiveEditorSide, setEditorContent, pendingHtml, setPendingHtml } =
     useNotecardStore()
   const { dimensions, sides, sheets } = config
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -23,6 +23,7 @@ export default function NotecardEditor() {
   const heightPx = Math.round(dimensions.height * PX_PER_INCH)
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       StarterKit,
       Superscript,
@@ -59,6 +60,15 @@ export default function NotecardEditor() {
   useEffect(() => {
     autoScale()
   }, [dimensions])
+
+  // Load HTML pushed from the paste panel
+  useEffect(() => {
+    if (pendingHtml && editor) {
+      editor.commands.setContent(pendingHtml)
+      setPendingHtml(null)
+      setTimeout(autoScale, 50)
+    }
+  }, [pendingHtml, editor])
 
   const totalSides = sides === 'double' ? sheets * 2 : sheets
   const sideLabels = Array.from({ length: totalSides }, (_, i) => {

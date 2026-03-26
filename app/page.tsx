@@ -1,8 +1,6 @@
 import ConfigSidebar from '@/components/config/ConfigSidebar'
 import NotecardEditor from '@/components/editor/NotecardEditor'
-import UploadPanel from '@/components/upload/UploadPanel'
-import PriorityPanel from '@/components/upload/PriorityPanel'
-import AnalyzeButton from '@/components/upload/AnalyzeButton'
+import PasteNotesPanel from '@/components/upload/PasteNotesPanel'
 import PrintButton from '@/components/print/PrintButton'
 
 export default function Home() {
@@ -26,15 +24,9 @@ export default function Home() {
         <NotecardEditor />
       </main>
 
-      {/* Right sidebar — upload + AI */}
+      {/* Right sidebar — paste notes */}
       <aside className="w-72 shrink-0 bg-gray-900 border-l border-gray-700 p-5 flex flex-col gap-6 overflow-y-auto">
-        <UploadPanel />
-        <div className="border-t border-gray-700 pt-4">
-          <PriorityPanel />
-        </div>
-        <div className="border-t border-gray-700 pt-4">
-          <AnalyzeButton />
-        </div>
+        <PasteNotesPanel />
       </aside>
     </div>
   )
