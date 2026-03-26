@@ -1,215 +1,239 @@
-// Converts copy-pasted Claude/ChatGPT output into clean HTML for the notecard editor.
-// The main problem: browser-rendered math appears twice in copy-paste —
-//   1. Unicode math italic (𝑆𝑘+1) — the visible version
-//   2. Accessibility fallback (S k+1 ​) — contains zero-width spaces
-// Strategy: remove fallback lines, clean unicode math, convert sub/superscripts.
+/**
+ * Converts copy-pasted Claude/ChatGPT output into compact notecard HTML.
+ *
+ * Problems in the raw paste:
+ *  1. Each equation appears TWICE — unicode math italic version + ASCII fallback
+ *     (sometimes on the same line, sometimes on consecutive lines with \u200B)
+ *  2. Block-level formatting wastes vertical space on a notecard
+ *
+ * Goals:
+ *  - Strip all duplicate content
+ *  - Convert unicode math → readable ASCII + proper sub/sup tags
+ *  - Produce the most compact HTML that still reads clearly
+ */
 
-// ── Unicode math italic → ASCII ──────────────────────────────────────────────
-// Lowercase a–z: U+1D44E–U+1D467
-// Uppercase A–Z: U+1D434–U+1D44D
-// Bold variants, etc. mapped below
-const buildMathItalicMap = (): Map<string, string> => {
+// ── Unicode math italic → ASCII ───────────────────────────────────────────────
+const buildMathMap = (): Map<string, string> => {
   const m = new Map<string, string>()
-  for (let i = 0; i < 26; i++) {
-    m.set(String.fromCodePoint(0x1D44E + i), String.fromCharCode(97 + i))  // italic a-z
-    m.set(String.fromCodePoint(0x1D434 + i), String.fromCharCode(65 + i))  // italic A-Z
-    m.set(String.fromCodePoint(0x1D41A + i), String.fromCharCode(97 + i))  // bold a-z
-    m.set(String.fromCodePoint(0x1D400 + i), String.fromCharCode(65 + i))  // bold A-Z
-    m.set(String.fromCodePoint(0x1D482 + i), String.fromCharCode(97 + i))  // bold italic a-z
-    m.set(String.fromCodePoint(0x1D468 + i), String.fromCharCode(65 + i))  // bold italic A-Z
+  const add = (base: number, ascii: number, count: number) => {
+    for (let i = 0; i < count; i++)
+      m.set(String.fromCodePoint(base + i), String.fromCharCode(ascii + i))
   }
-  // Bold digits 0-9: U+1D7CE–U+1D7D7
-  for (let i = 0; i < 10; i++) {
-    m.set(String.fromCodePoint(0x1D7CE + i), String.fromCharCode(48 + i))
-  }
+  add(0x1D44E, 97, 26)  // italic a-z
+  add(0x1D434, 65, 26)  // italic A-Z
+  add(0x1D41A, 97, 26)  // bold a-z
+  add(0x1D400, 65, 26)  // bold A-Z
+  add(0x1D482, 97, 26)  // bold-italic a-z
+  add(0x1D468, 65, 26)  // bold-italic A-Z
+  add(0x1D4EA, 97, 26)  // script a-z
+  add(0x1D4D0, 65, 26)  // script A-Z
+  add(0x1D7CE, 48, 10)  // bold digits 0-9
+  add(0x1D7E2, 48, 10)  // double-struck digits
   return m
 }
+const MATH_MAP = buildMathMap()
 
-const MATH_ITALIC_MAP = buildMathItalicMap()
-
-// Greek math italic → display greek
 const GREEK_MAP: Record<string, string> = {
-  '𝛼': 'α', '𝛽': 'β', '𝛾': 'γ', '𝛿': 'δ', '𝜀': 'ε', '𝜁': 'ζ',
-  '𝜂': 'η', '𝜃': 'θ', '𝜄': 'ι', '𝜅': 'κ', '𝜆': 'λ', '𝜇': 'μ',
-  '𝜈': 'ν', '𝜉': 'ξ', '𝜋': 'π', '𝜌': 'ρ', '𝜎': 'σ', '𝜏': 'τ',
-  '𝜐': 'υ', '𝜑': 'φ', '𝜒': 'χ', '𝜓': 'ψ', '𝜔': 'ω',
-  '𝛤': 'Γ', '𝛥': 'Δ', '𝛩': 'Θ', '𝛬': 'Λ', '𝛯': 'Ξ', '𝛱': 'Π',
-  '𝛴': 'Σ', '𝛷': 'Φ', '𝛹': 'Ψ', '𝛺': 'Ω',
+  '𝛼':'α','𝛽':'β','𝛾':'γ','𝛿':'δ','𝜀':'ε','𝜁':'ζ','𝜂':'η','𝜃':'θ',
+  '𝜄':'ι','𝜅':'κ','𝜆':'λ','𝜇':'μ','𝜈':'ν','𝜉':'ξ','𝜋':'π','𝜌':'ρ',
+  '𝜎':'σ','𝜏':'τ','𝜐':'υ','𝜑':'φ','𝜒':'χ','𝜓':'ψ','𝜔':'ω',
+  '𝛤':'Γ','𝛥':'Δ','𝛩':'Θ','𝛬':'Λ','𝛯':'Ξ','𝛱':'Π','𝛴':'Σ',
+  '𝛷':'Φ','𝛹':'Ψ','𝛺':'Ω',
   // bold greek
-  '𝝰': 'α', '𝝱': 'β', '𝝲': 'γ', '𝝳': 'δ', '𝝺': 'λ', '𝝻': 'μ',
-  '𝝼': 'ν', '𝝿': 'π', '𝞂': 'σ', '𝞆': 'χ',
+  '𝝰':'α','𝝱':'β','𝝲':'γ','𝝳':'δ','𝝺':'λ','𝝻':'μ','𝝼':'ν',
+  '𝝿':'π','𝞂':'σ','𝞆':'χ',
+  // hat/bar notation
+  'ˉ':'̄',
 }
 
-// Subscript unicode → sub-tag content
-const SUBSCRIPT_CHARS: Record<string, string> = {
-  '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4',
-  '₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
-  'ₐ':'a','ₑ':'e','ₒ':'o','ₙ':'n','ₖ':'k','ₓ':'x',
-  'ᵢ':'i','ⱼ':'j','ₘ':'m','ₚ':'p','ₛ':'s','ₜ':'t',
+const SUB: Record<string, string> = {
+  '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
+  'ₐ':'a','ₑ':'e','ₒ':'o','ₙ':'n','ₖ':'k','ₓ':'x','ᵢ':'i','ⱼ':'j',
+  'ₘ':'m','ₚ':'p','ₛ':'s','ₜ':'t','ᵣ':'r',
+}
+const SUP: Record<string, string> = {
+  '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
+  'ⁿ':'n','ᵐ':'m','ᵏ':'k','ʲ':'j','ⁱ':'i','ᵀ':'T',
 }
 
-// Superscript unicode → sup-tag content
-const SUPERSCRIPT_CHARS: Record<string, string> = {
-  '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4',
-  '⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
-  'ⁿ':'n','ᵐ':'m','ᵏ':'k','ʲ':'j','ⁱ':'i',
-}
+// Invisible/control chars to strip
+const INVIS_RE = /[\u200B\u200C\u200D\u2061\u2062\u2063\u2064\uFEFF\u00AD\u2060]/g
 
-// Invisible / control characters to strip
-const INVISIBLE_RE = /[\u200B\u200C\u200D\u2061\u2062\u2063\u2064\uFEFF\u00AD]/g
+// ── conversion helpers ────────────────────────────────────────────────────────
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-function convertUnicode(text: string): string {
+function convertUnicode(s: string): string {
   let out = ''
-  for (const char of text) {
-    if (MATH_ITALIC_MAP.has(char)) out += MATH_ITALIC_MAP.get(char)!
-    else if (GREEK_MAP[char]) out += GREEK_MAP[char]
-    else out += char
+  for (const ch of s) {
+    out += MATH_MAP.get(ch) ?? GREEK_MAP[ch] ?? ch
   }
   return out
 }
 
-function convertSubSup(text: string): string {
-  // Build HTML with <sub> and <sup> for subscript/superscript unicode
+// Convert sub/sup unicode → HTML tags; escape everything else
+function toHtml(s: string): string {
   let out = ''
-  let subRun = ''
-  let supRun = ''
-
+  let sub = '', sup = ''
   const flush = () => {
-    if (subRun) { out += `<sub>${escHtml(subRun)}</sub>`; subRun = '' }
-    if (supRun) { out += `<sup>${escHtml(supRun)}</sup>`; supRun = '' }
+    if (sub) { out += `<sub>${esc(sub)}</sub>`; sub = '' }
+    if (sup) { out += `<sup>${esc(sup)}</sup>`; sup = '' }
   }
-
-  for (const char of text) {
-    if (SUBSCRIPT_CHARS[char]) {
-      if (supRun) flush()
-      subRun += SUBSCRIPT_CHARS[char]
-    } else if (SUPERSCRIPT_CHARS[char]) {
-      if (subRun) flush()
-      supRun += SUPERSCRIPT_CHARS[char]
-    } else {
-      flush()
-      out += escHtml(char)
-    }
+  for (const ch of s) {
+    if (SUB[ch])      { if (sup) flush(); sub += SUB[ch] }
+    else if (SUP[ch]) { if (sub) flush(); sup += SUP[ch] }
+    else              { flush(); out += esc(ch) }
   }
   flush()
   return out
 }
 
-function escHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+function esc(s: string): string {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
 }
 
-function normalizeLine(line: string): string {
-  return line.replace(INVISIBLE_RE, '').replace(/\s+/g, '').toLowerCase()
+// Strip all invisible chars, convert unicode math, return plain text
+function cleanText(raw: string): string {
+  return convertUnicode(raw.replace(INVIS_RE, ''))
 }
 
-function isFallbackLine(line: string): boolean {
-  // Accessibility fallback lines contain zero-width spaces
-  return line.includes('\u200B') || line.includes('\u200C') || line.includes('\u200D')
+// Like cleanText but returns HTML with sub/sup tags
+function cleanHtml(raw: string): string {
+  return toHtml(convertUnicode(raw.replace(INVIS_RE, '')))
 }
 
-function processLine(raw: string): string {
-  // Remove invisible chars, convert unicode math
-  const step1 = raw.replace(INVISIBLE_RE, '')
-  const step2 = convertUnicode(step1)
-  return convertSubSup(step2)
+// ── deduplication ─────────────────────────────────────────────────────────────
+
+/** Normalize a string for comparison: lowercase, strip spaces and punctuation */
+function norm(s: string): string {
+  return s.replace(/\s+/g, '').replace(/[.,;:!?]/g, '').toLowerCase()
+}
+
+/**
+ * Same-line duplicate: ChatGPT/Claude sometimes emits unicode version + ASCII
+ * version concatenated on one line. After unicode conversion both halves are
+ * identical ASCII. Detect and keep only first half.
+ */
+function removeSameLineDuplicate(line: string): string {
+  const n = line.length
+  if (n < 8) return line
+  // Try split points from 30% to 70% of line length
+  for (let split = Math.floor(n * 0.3); split <= Math.floor(n * 0.7); split++) {
+    const a = norm(line.slice(0, split))
+    const b = norm(line.slice(split))
+    if (a.length > 5 && a === b) return line.slice(0, split).trim()
+    // Also check if b starts with a (one is a prefix of the other)
+    if (a.length > 8 && b.startsWith(a)) return line.slice(0, split).trim()
+  }
+  return line
 }
 
 // ── structure detection ───────────────────────────────────────────────────────
 
-function isSectionHeader(line: string): boolean {
-  return /^\d+\)\s/.test(line) || /^#{1,3}\s/.test(line)
+function isSectionHeader(line: string): { yes: boolean; num: string; title: string } {
+  const m = line.match(/^(\d+)\)\s*(.+)/)
+  if (m) return { yes: true, num: m[1], title: m[2] }
+  const m2 = line.match(/^#{1,3}\s+(.+)/)
+  if (m2) return { yes: true, num: '', title: m2[1] }
+  return { yes: false, num: '', title: '' }
 }
 
-function isBullet(line: string): boolean {
-  return /^[-•·*]\s/.test(line) || /^\d+\.\s/.test(line)
+function isBullet(line: string): string | null {
+  const m = line.match(/^[-•·*]\s*(.+)/)
+  if (m) return m[1]
+  const m2 = line.match(/^\d+\.\s+(.+)/)
+  if (m2) return m2[1]
+  return null
 }
 
-function isEmpty(line: string): boolean {
-  return line.trim() === ''
+function isEquation(line: string): boolean {
+  // Line is mostly a formula (high density of math operators/greek/sub-sup)
+  const mathChars = (line.match(/[=≡≈∝∑∏∫∂∞≤≥±×÷→⇒←↔√αβγδεζηθικλμνξπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ]/g) || []).length
+  return mathChars >= 2 || /[₀-₉⁰-⁹ᵢⱼₙₖ]/.test(line)
 }
 
 // ── main export ───────────────────────────────────────────────────────────────
 
 export interface ParsedNotesheet {
   html: string
-  sectionCount: number
-  lineCount: number
+  charCount: number
 }
 
 export function parsePastedNotes(raw: string): ParsedNotesheet {
+  // 1. Split into lines
   const rawLines = raw.split('\n')
 
-  // Step 1: remove accessibility fallback lines
-  const withoutFallbacks = rawLines.filter(line => !isFallbackLine(line))
-
-  // Step 2: deduplicate adjacent near-identical lines
-  // (sometimes the same equation appears on consecutive lines in slightly different unicode forms)
-  const deduped: string[] = []
-  for (let i = 0; i < withoutFallbacks.length; i++) {
-    const curr = normalizeLine(withoutFallbacks[i])
-    const prev = deduped.length > 0 ? normalizeLine(deduped[deduped.length - 1]) : ''
-    if (curr.length > 4 && curr === prev) continue  // exact duplicate after normalization
-    deduped.push(withoutFallbacks[i])
+  // 2. For each line: strip invisible chars, flag fallback lines
+  //    Fallback lines (containing \u200B etc.) are the accessibility duplicates — remove them
+  const cleaned: string[] = []
+  for (const raw of rawLines) {
+    if (INVIS_RE.test(raw)) continue   // skip fallback/accessibility lines
+    const c = cleanText(raw.trim())
+    if (c) cleaned.push(c)
   }
 
-  // Step 3: group lines into blocks and emit HTML
-  const htmlParts: string[] = []
-  let inList = false
-  let sectionCount = 0
+  // 3. Remove same-line duplicates (unicode+ASCII concatenated on one line)
+  const deduped = cleaned.map(removeSameLineDuplicate)
 
-  const closeList = () => {
-    if (inList) { htmlParts.push('</ul>'); inList = false }
+  // 4. Remove adjacent duplicate lines (after normalization)
+  const unique: string[] = []
+  for (const line of deduped) {
+    const last = unique[unique.length - 1]
+    if (last && norm(line) === norm(last)) continue
+    unique.push(line)
   }
 
-  for (const rawLine of deduped) {
-    const line = rawLine.trim()
+  // 5. Build compact HTML
+  const parts: string[] = []
+  let bulletBuffer: string[] = []
+  let inSection = false
 
-    if (isEmpty(line)) {
-      closeList()
-      continue
-    }
-
-    if (isSectionHeader(line)) {
-      closeList()
-      sectionCount++
-      // Strip leading number/hash markers, process the rest
-      const text = line.replace(/^\d+\)\s*/, '').replace(/^#{1,3}\s*/, '')
-      htmlParts.push(`<h3>${processLine(text)}</h3>`)
-      continue
-    }
-
-    if (isBullet(line)) {
-      if (!inList) { htmlParts.push('<ul>'); inList = true }
-      const text = line.replace(/^[-•·*]\s*/, '').replace(/^\d+\.\s*/, '')
-      htmlParts.push(`<li>${processLine(text)}</li>`)
-      continue
-    }
-
-    // Regular line — check if it looks equation-heavy
-    closeList()
-    const processed = processLine(line)
-    // Wrap equation-like lines in a <p> with monospace styling
-    const isEquationLine = /[=≡≈∝∑∏∫∂∞≤≥±×÷→⇒⟹←⟸↔⟺√]/.test(line) ||
-      /[α-ωΑ-Ω]/.test(line) ||
-      /[₀-₉ⁿ⁰-⁹]/.test(line)
-    if (isEquationLine) {
-      htmlParts.push(`<p class="eq">${processed}</p>`)
+  const flushBullets = () => {
+    if (!bulletBuffer.length) return
+    // Short bullets (avg < 30 chars) go inline to save space
+    const avgLen = bulletBuffer.reduce((s, b) => s + b.length, 0) / bulletBuffer.length
+    if (avgLen < 35 && bulletBuffer.length <= 6) {
+      parts.push(`<p class="bl">${bulletBuffer.map(b => '• ' + toHtml(b)).join('  ')}</p>`)
     } else {
-      htmlParts.push(`<p>${processed}</p>`)
+      parts.push('<ul>' + bulletBuffer.map(b => `<li>${toHtml(b)}</li>`).join('') + '</ul>')
+    }
+    bulletBuffer = []
+  }
+
+  for (const line of unique) {
+    // Blank line — flush bullets, no extra space
+    if (!line.trim()) { flushBullets(); continue }
+
+    const sec = isSectionHeader(line)
+    if (sec.yes) {
+      flushBullets()
+      const label = sec.num ? `${sec.num}. ${sec.title}` : sec.title
+      parts.push(`<p class="sh"><strong>${toHtml(label)}</strong></p>`)
+      inSection = true
+      continue
+    }
+
+    const bulletText = isBullet(line)
+    if (bulletText !== null) {
+      bulletBuffer.push(bulletText)
+      continue
+    }
+
+    flushBullets()
+
+    // Colon-label lines like "Input analysis:" → treat as sub-header inline
+    if (/^[A-Z][^.!?]{0,50}:$/.test(line)) {
+      parts.push(`<p><strong>${toHtml(line)}</strong></p>`)
+      continue
+    }
+
+    if (isEquation(line)) {
+      parts.push(`<p class="eq">${toHtml(line)}</p>`)
+    } else {
+      parts.push(`<p>${toHtml(line)}</p>`)
     }
   }
 
-  closeList()
+  flushBullets()
 
-  return {
-    html: htmlParts.join(''),
-    sectionCount,
-    lineCount: deduped.filter(l => l.trim()).length,
-  }
+  const html = parts.join('')
+  return { html, charCount: html.replace(/<[^>]+>/g, '').length }
 }

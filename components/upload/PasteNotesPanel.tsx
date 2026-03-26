@@ -6,14 +6,14 @@ import { useNotecardStore } from '@/lib/store/notecardStore'
 
 export default function PasteNotesPanel() {
   const [text, setText] = useState('')
-  const [status, setStatus] = useState<{ lines: number; sections: number } | null>(null)
+  const [status, setStatus] = useState<{ chars: number } | null>(null)
   const { setPendingHtml } = useNotecardStore()
 
   const handleFormat = () => {
     if (!text.trim()) return
     const result = parsePastedNotes(text)
     setPendingHtml(result.html)
-    setStatus({ lines: result.lineCount, sections: result.sectionCount })
+    setStatus({ chars: result.charCount })
   }
 
   const handleClear = () => {
@@ -48,7 +48,7 @@ export default function PasteNotesPanel() {
 
       {status && (
         <p className="text-xs text-green-400 bg-green-950/30 rounded px-2 py-1.5">
-          ✓ Loaded {status.lines} lines across {status.sections} section{status.sections !== 1 ? 's' : ''}
+          ✓ Formatted — {status.chars} characters on card
         </p>
       )}
 

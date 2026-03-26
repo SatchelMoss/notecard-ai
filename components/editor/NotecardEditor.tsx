@@ -12,30 +12,31 @@ import EditorToolbar from './EditorToolbar'
 import 'katex/dist/katex.min.css'
 
 const PX_PER_INCH = 96
+const MIN_FONT_PT = 6.5
+const MAX_FONT_PT = 9
+const PT_TO_PX = 4 / 3  // 1pt = 1.333px
 
 export default function NotecardEditor() {
-  const { config, activeEditorSide, setActiveEditorSide, setEditorContent, pendingHtml, setPendingHtml } =
-    useNotecardStore()
+  const {
+    config, activeEditorSide, setActiveEditorSide,
+    setEditorContent, pendingHtml, setPendingHtml,
+  } = useNotecardStore()
   const { dimensions, sides, sheets } = config
   const canvasRef = useRef<HTMLDivElement>(null)
 
-  const widthPx = Math.round(dimensions.width * PX_PER_INCH)
+  const widthPx  = Math.round(dimensions.width  * PX_PER_INCH)
   const heightPx = Math.round(dimensions.height * PX_PER_INCH)
+
+  // Padding inside the card (in px)
+  const PAD = 8
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [
-      StarterKit,
-      Superscript,
-      Subscript,
-      TextStyle,
-      Mathematics,
-    ],
+    extensions: [StarterKit, Superscript, Subscript, TextStyle, Mathematics],
     content: '<p></p>',
     editorProps: {
       attributes: {
-        class:
-          'prose prose-sm prose-invert max-w-none focus:outline-none h-full overflow-hidden text-[10px] leading-snug',
+        class: 'focus:outline-none',
       },
     },
     onUpdate: ({ editor }) => {
@@ -44,29 +45,35 @@ export default function NotecardEditor() {
     },
   })
 
+  /**
+   * Auto-scale: start at MAX_FONT_PT and step down until content fits,
+   * or stop at MIN_FONT_PT. This maximises text size while ensuring
+   * everything is visible on the card.
+   */
   const autoScale = () => {
-    const el = canvasRef.current
-    if (!el) return
-    const inner = el.querySelector('.ProseMirror') as HTMLElement | null
-    if (!inner) return
-    let size = 10
-    inner.style.fontSize = `${size}px`
-    while (inner.scrollHeight > el.clientHeight && size > 6) {
-      size -= 0.5
-      inner.style.fontSize = `${size}px`
+    const card = canvasRef.current
+    if (!card) return
+    const proseMirror = card.querySelector('.ProseMirror') as HTMLElement | null
+    if (!proseMirror) return
+
+    const maxHeight = heightPx - PAD * 2
+
+    // Start at max, step down
+    for (let pt = MAX_FONT_PT; pt >= MIN_FONT_PT; pt -= 0.5) {
+      proseMirror.style.fontSize = `${pt * PT_TO_PX}px`
+      if (proseMirror.scrollHeight <= maxHeight) break
     }
   }
 
-  useEffect(() => {
-    autoScale()
-  }, [dimensions])
+  useEffect(() => { autoScale() }, [dimensions])
 
   // Load HTML pushed from the paste panel
   useEffect(() => {
     if (pendingHtml && editor) {
       editor.commands.setContent(pendingHtml)
       setPendingHtml(null)
-      setTimeout(autoScale, 50)
+      // Two-pass: let DOM settle, then scale
+      requestAnimationFrame(() => requestAnimationFrame(autoScale))
     }
   }, [pendingHtml, editor])
 
@@ -79,18 +86,18 @@ export default function NotecardEditor() {
   return (
     <div className="flex flex-col items-center gap-4 py-6 px-4 flex-1 overflow-y-auto bg-gray-950">
       <div className="flex flex-col items-center gap-3 w-full">
+
         {/* Side tabs */}
         {totalSides > 1 && (
           <div className="flex gap-2 flex-wrap justify-center">
             {sideLabels.map((label, i) => {
               const sideKey = i % 2 === 0 ? 'front' : 'back'
-              const isActive = activeEditorSide === sideKey
               return (
                 <button
                   key={i}
                   onClick={() => setActiveEditorSide(sideKey)}
                   className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
-                    isActive
+                    activeEditorSide === sideKey
                       ? 'bg-indigo-600 text-white'
                       : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                   }`}
@@ -105,16 +112,17 @@ export default function NotecardEditor() {
         {/* Toolbar */}
         {editor && <EditorToolbar editor={editor} />}
 
-        {/* Card canvas */}
+        {/* Card canvas — exact size, white background, clipped */}
         <div
-          className="relative bg-white text-black rounded-md shadow-2xl overflow-hidden"
-          style={{ width: widthPx, height: heightPx }}
+          className="bg-white text-black shadow-2xl overflow-hidden"
+          style={{ width: widthPx, height: heightPx, border: '1px solid #ccc' }}
         >
           <div
             ref={canvasRef}
-            className="w-full h-full p-3 overflow-hidden"
+            className="w-full h-full overflow-hidden"
+            style={{ padding: PAD }}
           >
-            <EditorContent editor={editor} className="h-full" />
+            <EditorContent editor={editor} />
           </div>
         </div>
 
