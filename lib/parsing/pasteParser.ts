@@ -1,13 +1,12 @@
 /**
- * Converts copy-pasted Claude/ChatGPT output into compact HORIZONTAL notecard HTML.
- *
- * The goal: pack everything left-to-right. Section header → inline bold, then
- * all content flows as one paragraph, bullets joined with " • ".
- * No wasted vertical space. Every line should be full-width.
+ * Converts copy-pasted Claude/ChatGPT output into compact horizontal notecard HTML.
  *
  * Raw paste problems:
  *  1. Equations appear TWICE — unicode math italic + ASCII fallback (zero-width spaces)
- *  2. Sometimes both versions are on the same line (concatenated)
+ *  2. Sometimes both versions on the same line (concatenated)
+ *
+ * Output: one <p> per section, everything flowing left-to-right.
+ * Only items that were actual bullet points in the source get a • prefix.
  */
 
 // ── Unicode math italic → ASCII ───────────────────────────────────────────────
@@ -17,11 +16,11 @@ const buildMathMap = (): Map<string, string> => {
     for (let i = 0; i < n; i++)
       m.set(String.fromCodePoint(base + i), String.fromCharCode(ascii + i))
   }
-  add(0x1D44E, 97, 26); add(0x1D434, 65, 26)  // italic a-z, A-Z
-  add(0x1D41A, 97, 26); add(0x1D400, 65, 26)  // bold a-z, A-Z
-  add(0x1D482, 97, 26); add(0x1D468, 65, 26)  // bold-italic a-z, A-Z
-  add(0x1D4EA, 97, 26); add(0x1D4D0, 65, 26)  // script a-z, A-Z
-  add(0x1D7CE, 48, 10); add(0x1D7E2, 48, 10)  // bold/double-struck digits
+  add(0x1D44E, 97, 26); add(0x1D434, 65, 26)
+  add(0x1D41A, 97, 26); add(0x1D400, 65, 26)
+  add(0x1D482, 97, 26); add(0x1D468, 65, 26)
+  add(0x1D4EA, 97, 26); add(0x1D4D0, 65, 26)
+  add(0x1D7CE, 48, 10); add(0x1D7E2, 48, 10)
   return m
 }
 const MATH_MAP = buildMathMap()
@@ -41,10 +40,9 @@ const SUP: Record<string, string> = {
   '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
   'ⁿ':'n','ᵐ':'m','ᵏ':'k','ʲ':'j','ⁱ':'i','ᵀ':'T',
 }
-
 const INVIS_RE = /[\u200B\u200C\u200D\u2061\u2062\u2063\u2064\uFEFF\u00AD\u2060]/g
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── conversion helpers ────────────────────────────────────────────────────────
 
 function convertUnicode(s: string): string {
   let out = ''
@@ -52,11 +50,10 @@ function convertUnicode(s: string): string {
   return out
 }
 
-function esc(s: string): string {
+function esc(s: string) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
 }
 
-/** Convert sub/sup unicode → HTML tags, escape everything else */
 function toHtml(raw: string): string {
   const s = convertUnicode(raw.replace(INVIS_RE, ''))
   let out = '', sub = '', sup = ''
@@ -73,15 +70,14 @@ function toHtml(raw: string): string {
   return out
 }
 
-function cleanText(raw: string): string {
-  return convertUnicode(raw.replace(INVIS_RE, ''))
+function cleanText(s: string) {
+  return convertUnicode(s.replace(INVIS_RE, ''))
 }
 
-function norm(s: string): string {
+function norm(s: string) {
   return s.replace(/\s+/g,'').replace(/[.,;:!?]/g,'').toLowerCase()
 }
 
-/** Remove same-line duplicate: unicode version + ASCII version concatenated */
 function dedupeInline(line: string): string {
   const n = line.length
   if (n < 8) return line
@@ -97,7 +93,7 @@ function dedupeInline(line: string): string {
 // ── structure detection ───────────────────────────────────────────────────────
 
 function parseSectionHeader(line: string): { num: string; title: string } | null {
-  const m = line.match(/^(\d+)\)\s*(.+)/) ?? line.match(/^(\d+)\.\s*(.+)/)
+  const m = line.match(/^(\d+)\)\s*(.+)/)
   if (m) return { num: m[1], title: m[2] }
   const m2 = line.match(/^#{1,3}\s+(.+)/)
   if (m2) return { num: '', title: m2[1] }
@@ -105,147 +101,104 @@ function parseSectionHeader(line: string): { num: string; title: string } | null
 }
 
 function parseBullet(line: string): string | null {
-  const m = line.match(/^[-•·*]\s*(.+)/) ?? line.match(/^\d+\.\s+(.+)/)
+  const m = line.match(/^[-•·*]\s+(.+)/)
   return m ? m[1] : null
 }
 
-/** True if line is mostly a math expression */
 function isMathLine(line: string): boolean {
-  const mathCount = (line.match(/[=≡≈∑∏∫∂∞≤≥±×÷→⇒←↔√αβγδεζηθλμνπρσχω]/g) || []).length
-  return mathCount >= 2 || /[₀-₉⁰-⁹]/.test(line)
+  const mathChars = (line.match(/[=≡≈∑∏∫∂∞≤≥±×÷→⇒←↔√αβγδεζηθλμνπρσχω]/g) || []).length
+  return mathChars >= 2 || /[₀-₉⁰-⁹ₐₑₒₙₖ]/.test(line)
 }
 
-// ── section model ─────────────────────────────────────────────────────────────
+// ── block model ───────────────────────────────────────────────────────────────
 
-interface Block {
-  type: 'section' | 'para' | 'bullets' | 'math'
-  header?: string   // bold prefix for section blocks
-  items: string[]   // text lines / bullet texts
-}
+type ItemKind = 'text' | 'bullet' | 'math' | 'subhead'
+interface Item { kind: ItemKind; text: string }
+interface Block { header: string; items: Item[] }
 
 // ── main export ───────────────────────────────────────────────────────────────
 
-export interface ParsedNotesheet {
-  html: string
-  charCount: number
-}
+export interface ParsedNotesheet { html: string; charCount: number }
 
 export function parsePastedNotes(raw: string): ParsedNotesheet {
-  // ── Phase 1: clean each line ──────────────────────────────────────────────
+  // 1. Clean lines, strip fallbacks
   const lines: string[] = []
   for (const rawLine of raw.split('\n')) {
-    // Skip accessibility-fallback lines (contain zero-width spaces)
     if (INVIS_RE.test(rawLine)) continue
     const c = dedupeInline(cleanText(rawLine.trim()))
     if (c) lines.push(c)
   }
 
-  // Remove adjacent duplicate lines
+  // 2. Remove adjacent duplicates
   const unique: string[] = []
-  for (const line of lines) {
-    if (unique.length && norm(line) === norm(unique[unique.length - 1])) continue
-    unique.push(line)
+  for (const l of lines) {
+    if (unique.length && norm(l) === norm(unique[unique.length - 1])) continue
+    unique.push(l)
   }
 
-  // ── Phase 2: group into blocks ───────────────────────────────────────────
+  // 3. Group into blocks
   const blocks: Block[] = []
-  let current: Block | null = null
+  let cur: Block = { header: '', items: [] }
 
-  const pushCurrent = () => { if (current) blocks.push(current) }
+  const push = () => {
+    if (cur.header || cur.items.length) blocks.push(cur)
+    cur = { header: '', items: [] }
+  }
 
   for (const line of unique) {
-    if (!line.trim()) continue
-
     const sec = parseSectionHeader(line)
     if (sec) {
-      pushCurrent()
-      const label = sec.num ? `${sec.num}.` : ''
-      current = { type: 'section', header: label + ' ' + sec.title.toUpperCase(), items: [] }
+      push()
+      cur.header = (sec.num ? sec.num + '. ' : '') + sec.title.toUpperCase()
       continue
     }
 
+    // Explicit bullet from source (started with -, •, *, ·)
     const bullet = parseBullet(line)
     if (bullet !== null) {
-      if (!current) current = { type: 'bullets', items: [] }
-      if (current.type === 'section' || current.type === 'bullets') {
-        current.items.push(bullet)
-      } else {
-        pushCurrent()
-        current = { type: 'bullets', items: [bullet] }
-      }
+      cur.items.push({ kind: 'bullet', text: bullet })
       continue
     }
 
-    // Colon-label sub-headers like "Input analysis:" → inline bold sub-header
+    // Colon sub-header like "Input analysis:"
     if (/^[A-Z][^.!?\n]{0,60}:$/.test(line)) {
-      if (current?.type === 'section') {
-        // Inline into the section as a bold prefix for the next items
-        current.items.push('\x00SUBHEAD:' + line)
-      } else {
-        pushCurrent()
-        current = { type: 'section', header: line, items: [] }
-      }
+      cur.items.push({ kind: 'subhead', text: line })
       continue
     }
 
-    // Math line or regular line — append to current section, or start para
-    if (!current) current = { type: 'para', items: [] }
-    if (current.type === 'section' || current.type === 'para' || current.type === 'math') {
-      current.items.push(line)
-    } else {
-      pushCurrent()
-      current = { type: isMathLine(line) ? 'math' : 'para', items: [line] }
-    }
+    // Math or regular text
+    cur.items.push({ kind: isMathLine(line) ? 'math' : 'text', text: line })
   }
-  pushCurrent()
+  push()
 
-  // ── Phase 3: render compact horizontal HTML ──────────────────────────────
-  // Each section becomes ONE <p> with everything inline:
-  //   [BOLD HEADER] intro text • bullet1 • bullet2 • eq1  eq2
+  // 4. Render: one <p> per block, everything inline
   const parts: string[] = []
 
   for (const block of blocks) {
-    if (!block.items.length && !block.header) continue
+    if (!block.header && !block.items.length) continue
 
     const tokens: string[] = []
 
-    // Section / sub-header bold prefix
     if (block.header) {
       tokens.push(`<strong>${toHtml(block.header)}</strong>`)
     }
 
-    // All items inline
-    let bulletRun: string[] = []
-
-    const flushBullets = () => {
-      if (!bulletRun.length) return
-      tokens.push(bulletRun.map(b => `• ${toHtml(b)}`).join(' '))
-      bulletRun = []
-    }
-
     for (const item of block.items) {
-      if (item.startsWith('\x00SUBHEAD:')) {
-        flushBullets()
-        const text = item.slice(9)
-        tokens.push(`<strong>${toHtml(text)}</strong>`)
-      } else if (isMathLine(item)) {
-        flushBullets()
-        tokens.push(`<code>${toHtml(item)}</code>`)
-      } else {
-        // Short items that look like list entries — collect as bullets
-        const isBulletLike = item.length < 60 &&
-          !/[.!?]$/.test(item) &&
-          block.type === 'section' &&
-          !block.header?.includes(':')
-        if (isBulletLike && !tokens.some(t => t.includes('<code>'))) {
-          bulletRun.push(item)
-        } else {
-          flushBullets()
-          tokens.push(toHtml(item))
-        }
+      switch (item.kind) {
+        case 'bullet':
+          tokens.push(`• ${toHtml(item.text)}`)
+          break
+        case 'math':
+          tokens.push(`<code>${toHtml(item.text)}</code>`)
+          break
+        case 'subhead':
+          tokens.push(`<strong>${toHtml(item.text)}</strong>`)
+          break
+        case 'text':
+          tokens.push(toHtml(item.text))
+          break
       }
     }
-    flushBullets()
 
     parts.push(`<p>${tokens.join(' ')}</p>`)
   }
