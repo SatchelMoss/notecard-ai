@@ -20,7 +20,7 @@ const PAD = 8
 export default function NotecardEditor() {
   const {
     config, activeEditorSide, setActiveEditorSide,
-    setEditorContent, pendingHtml, setPendingHtml,
+    setEditorContent, setEditorHtml, pendingHtml, setPendingHtml,
   } = useNotecardStore()
   const { dimensions, sides, sheets } = config
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -68,6 +68,7 @@ export default function NotecardEditor() {
     editorProps: { attributes: { class: 'focus:outline-none' } },
     onUpdate: ({ editor }) => {
       setEditorContent(activeEditorSide, editor.getJSON())
+      setEditorHtml(activeEditorSide, editor.getHTML())
       if (lockedPt === null) autoScale()
     },
   })
@@ -77,6 +78,7 @@ export default function NotecardEditor() {
   useEffect(() => {
     if (pendingHtml && editor) {
       editor.commands.setContent(pendingHtml)
+      setEditorHtml(activeEditorSide, pendingHtml)
       setPendingHtml(null)
       setLockedPt(null)
       requestAnimationFrame(() => requestAnimationFrame(autoScale))

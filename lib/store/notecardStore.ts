@@ -15,8 +15,10 @@ interface NotecardStore {
   priorities: TopicPriority[]
   editorContentFront: object | null
   editorContentBack: object | null
+  editorHtmlFront: string
+  editorHtmlBack: string
   activeEditorSide: 'front' | 'back'
-  pendingHtml: string | null   // set this to push HTML into the active editor
+  pendingHtml: string | null
 
   setPreset: (preset: DimensionPreset) => void
   setCustomDimensions: (dims: Dimensions) => void
@@ -27,6 +29,7 @@ interface NotecardStore {
   setPriorities: (priorities: TopicPriority[]) => void
   updatePriority: (topicId: string, weight: number) => void
   setEditorContent: (side: 'front' | 'back', content: object) => void
+  setEditorHtml: (side: 'front' | 'back', html: string) => void
   setActiveEditorSide: (side: 'front' | 'back') => void
   setPendingHtml: (html: string | null) => void
 }
@@ -42,6 +45,8 @@ export const useNotecardStore = create<NotecardStore>((set) => ({
   priorities: [],
   editorContentFront: null,
   editorContentBack: null,
+  editorHtmlFront: '',
+  editorHtmlBack: '',
   activeEditorSide: 'front',
   pendingHtml: null,
 
@@ -104,6 +109,9 @@ export const useNotecardStore = create<NotecardStore>((set) => ({
       ? { editorContentFront: content }
       : { editorContentBack: content }
     ),
+
+  setEditorHtml: (side, html) =>
+    set(side === 'front' ? { editorHtmlFront: html } : { editorHtmlBack: html }),
 
   setActiveEditorSide: (side) => set({ activeEditorSide: side }),
   setPendingHtml: (html) => set({ pendingHtml: html }),
